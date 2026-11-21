@@ -564,6 +564,8 @@ pub struct Guard {
     sandboxed: bool,
     /// NyPi's home as a command may spell it: as configured, and with symlinks resolved.
     home_spellings: Vec<String>,
+    /// Secret files and folders as an unsandboxed command may spell them.
+    secret_spellings: Vec<String>,
     agents_dir: PathBuf,
     goals: PathBuf,
 }
@@ -621,6 +623,7 @@ impl Guard {
             ),
         ];
         let dangerous_commands = rules.iter().map(|(pattern, why)| (Regex::new(pattern).unwrap(), *why)).collect();
+        let secret_spellings = secret_spellings(paths, &protected);
         Guard {
             dangerous_commands,
             disk: Disk::Here,
@@ -628,6 +631,7 @@ impl Guard {
             cwd: cwd.to_path_buf(),
             sandboxed,
             home_spellings: vec![paths.home.display().to_string(), real_path(&paths.home).display().to_string()],
+            secret_spellings,
             agents_dir: real_path(&paths.home.join("agents")),
             goals: real_path(&paths.goals()),
         }
@@ -662,6 +666,9 @@ impl Guard {
                 }
                 // No sandbox: all there is to go on is the text. `.nypi` covers `~/.nypi`,
                 // `$HOME/.nypi`, `cd ~/.nypi`, and a project's folder alike.
+                if mentions_secret(command, &self.secret_spellings) {
+                    return Some("a command that names keys or tokens, which tools never read".to_string());
+                }
                 let mentions =
                     command.contains(".nypi") || self.home_spellings.iter().any(|home| command.contains(home));
                 (mentions && WRITERS.iter().any(|writer| command.contains(writer))).then(|| {
@@ -703,6 +710,45 @@ fn scheduled_command<'a>(tool: &str, arguments: &'a Value) -> Option<&'a str> {
     (tool == "schedule" && arguments["action"] == "add" && arguments["trigger"]["kind"] == "command")
         .then(|| arguments["trigger"]["command"].as_str())
         .flatten()
+}
+
+fn secret_spellings(paths: &Paths, protected: &Protected) -> Vec<String> {
+    let mut out = Vec::new();
+    for secret in &protected.secrets {
+        out.push(secret.display().to_string());
+        if let Ok(rest) = secret.strip_prefix("/private") {
+            out.push(Path::new("/").join(rest).display().to_string());
+        }
+        if let Ok(rel) = secret.strip_prefix(&protected.home) {
+            out.push(paths.home.join(rel).display().to_string());
+            out.push(format!(".nypi/{}", rel.display()));
+        }
+        if let Some(user) = &protected.user_home
+            && let Ok(rel) = secret.strip_prefix(user)
+        {
+            out.push(format!("~/{}", rel.display()));
+            out.push(format!("$HOME/{}", rel.display()));
+            out.push(format!("${{HOME}}/{}", rel.display()));
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn mentions_secret(command: &str, spellings: &[String]) -> bool {
+    spellings.iter().any(|spelling| {
+        !spelling.is_empty()
+            && command.match_indices(spelling.as_str()).any(|(idx, _)| {
+                let before = command[..idx].chars().next_back();
+                let after = command[idx + spelling.len()..].chars().next();
+                let left_ok = before.is_none_or(|c| !c.is_ascii_alphanumeric() && c != '_' && c != '-');
+                let right_ok = after.is_none_or(|c| {
+                    matches!(c, '/' | ' ' | '\t' | '\n' | '\r' | '\'' | '"' | '`' | ';' | '&' | '|' | ')' | '<' | '>')
+                });
+                left_ok && right_ok
+            })
+    })
 }
 
 /// Tools that never need approval in `all` mode: they only read, or (self_prompt) version every edit.
@@ -1111,6 +1157,11 @@ mod tests {
         }
         assert!(bash(&open, "cat ~/.nypi/settings.json").is_none(), "reading settings is fine");
         assert!(bash(&open, "ls -la .nypi").is_none());
+        for secret in
+            ["cat ~/.nypi/auth.json", "cat ~/.nypi/run/board.token", &format!("cat {}/.env", user.path().display())]
+        {
+            assert!(bash(&open, secret).is_some(), "secrets are never read without a sandbox: {secret}");
+        }
         // With the sandbox the kernel judges the file, so the text is left alone.
         let sandboxed = guard_in(user.path(), user.path(), true);
         assert!(bash(&sandboxed, "grep -rn '.nypi' crates > /tmp/out.txt").is_none());
