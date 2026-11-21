@@ -83,9 +83,15 @@ enum Kind {
     None,
     /// macOS: the Seatbelt profile.
     Seatbelt(Arc<str>),
-    /// Linux: bubblewrap's arguments, and the user's home, below which `.nypi` folders are kept
-    /// read-only.
-    Bubblewrap { program: Arc<Path>, args: Arc<[OsString]>, user_home: Option<Arc<Path>> },
+    /// Linux: bubblewrap's read-only mounts, the masks that must always lie on top of them, NyPi's
+    /// home, and the user's home below which project `.nypi` folders are kept read-only.
+    Bubblewrap {
+        program: Arc<Path>,
+        ro_args: Arc<[OsString]>,
+        mask_args: Arc<[OsString]>,
+        home: Arc<Path>,
+        user_home: Option<Arc<Path>>,
+    },
 }
 
 /// How to start a tool's subprocess. Cheap to clone; `Sandbox::default()` starts it directly,
@@ -143,20 +149,27 @@ pub fn profile(protected: &Protected) -> String {
 /// the run folder and the key files inside NyPi's home are masked after the home is made
 /// read-only. Only what exists can be mounted over; the rest is the guard's.
 pub fn bubblewrap_args(protected: &Protected) -> Vec<OsString> {
-    let mut args: Vec<OsString> = ["--dev-bind", "/", "/", "--die-with-parent"].iter().map(OsString::from).collect();
+    let (mut args, masks) = bubblewrap_parts(protected);
+    args.extend(masks);
+    args
+}
+
+fn bubblewrap_parts(protected: &Protected) -> (Vec<OsString>, Vec<OsString>) {
+    let mut ro: Vec<OsString> = ["--dev-bind", "/", "/", "--die-with-parent"].iter().map(OsString::from).collect();
     let read_only = std::iter::once(&protected.home).chain(&protected.folders).chain(&protected.files);
     for path in read_only.filter(|path| path.exists()) {
-        args.extend(["--ro-bind".into(), path.clone().into_os_string(), path.clone().into_os_string()]);
+        ro.extend(["--ro-bind".into(), path.clone().into_os_string(), path.clone().into_os_string()]);
     }
+    let mut masks = Vec::new();
     let run = protected.home.join("run");
     for path in protected.secrets.iter().chain(std::iter::once(&run)) {
         if path.is_dir() {
-            args.extend(["--tmpfs".into(), path.clone().into_os_string()]);
+            masks.extend(["--tmpfs".into(), path.clone().into_os_string()]);
         } else if path.exists() {
-            args.extend(["--ro-bind".into(), "/dev/null".into(), path.clone().into_os_string()]);
+            masks.extend(["--ro-bind".into(), "/dev/null".into(), path.clone().into_os_string()]);
         }
     }
-    args
+    (ro, masks)
 }
 
 /// The `.nypi` folders that exist at `folder`, above it, and in project folders just below it,
@@ -301,9 +314,12 @@ impl Sandbox {
         if cfg!(target_os = "linux") {
             return match bubblewrap_available() {
                 Ok(program) => {
+                    let (ro, masks) = bubblewrap_parts(protected);
                     let kind = Kind::Bubblewrap {
                         program: program.into(),
-                        args: bubblewrap_args(protected).into(),
+                        ro_args: ro.into(),
+                        mask_args: masks.into(),
+                        home: protected.home.as_path().into(),
                         user_home: protected.user_home.as_deref().map(Arc::from),
                     };
                     (Sandbox { kind, allow_env }, None)
@@ -327,14 +343,25 @@ impl Sandbox {
     }
 
     /// The same sandbox for a subprocess that works in `folder`: where the sandbox mounts over
-    /// what exists (Linux), that folder's `.nypi` and those above it are kept read-only too.
+    /// what exists (Linux), that folder's `.nypi`, those above it, and those in projects below it
+    /// are kept read-only too, always underneath the secret and run-folder masks.
     pub fn in_folder(&self, folder: &Path) -> Sandbox {
-        let Kind::Bubblewrap { program, args, user_home } = &self.kind else { return self.clone() };
-        let mut args: Vec<OsString> = args.to_vec();
+        let Kind::Bubblewrap { program, ro_args, mask_args, home, user_home } = &self.kind else {
+            return self.clone();
+        };
+        let mut ro: Vec<OsString> = ro_args.to_vec();
         for nypi in nypi_folders(folder, user_home.as_deref()) {
-            args.extend(["--ro-bind".into(), nypi.clone().into_os_string(), nypi.into_os_string()]);
+            if nypi != home.as_ref() {
+                ro.extend(["--ro-bind".into(), nypi.clone().into_os_string(), nypi.into_os_string()]);
+            }
         }
-        let kind = Kind::Bubblewrap { program: program.clone(), args: args.into(), user_home: user_home.clone() };
+        let kind = Kind::Bubblewrap {
+            program: program.clone(),
+            ro_args: ro.into(),
+            mask_args: mask_args.clone(),
+            home: home.clone(),
+            user_home: user_home.clone(),
+        };
         Sandbox { kind, allow_env: self.allow_env.clone() }
     }
 
@@ -348,9 +375,9 @@ impl Sandbox {
                 command.arg("-p").arg(&**profile).arg(program);
                 command
             }
-            Kind::Bubblewrap { program: bwrap, args, .. } => {
+            Kind::Bubblewrap { program: bwrap, ro_args, mask_args, .. } => {
                 let mut command = std::process::Command::new(&**bwrap);
-                command.args(args.iter()).arg("--").arg(program);
+                command.args(ro_args.iter()).args(mask_args.iter()).arg("--").arg(program);
                 command
             }
             Kind::None => std::process::Command::new(program),
@@ -574,6 +601,24 @@ mod tests {
         let found = nypi_folders(&user_home.join("code/site/src"), Some(&user_home));
         assert_eq!(found, [user_home.join("code/site/.nypi"), home.clone()]);
         assert!(nypi_folders(Path::new("/tmp"), Some(&user_home)).is_empty());
+
+        // `in_folder` never mounts NyPi's home a second time over the secret and run-folder masks.
+        let (ro, masks) = bubblewrap_parts(&protected);
+        let scoped = Sandbox {
+            kind: Kind::Bubblewrap {
+                program: Path::new("/usr/bin/bwrap").into(),
+                ro_args: ro.into(),
+                mask_args: masks.into(),
+                home: protected.home.as_path().into(),
+                user_home: Some(user_home.as_path().into()),
+            },
+            allow_env: Arc::from([]),
+        }
+        .in_folder(&user_home);
+        let cmd_args: Vec<String> = scoped.command("sh").get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        let last_ro = cmd_args.iter().rposition(|a| a == "--ro-bind" || a == "--tmpfs").unwrap();
+        assert_eq!(&cmd_args[last_ro..last_ro + 2], ["--tmpfs", &text(&home.join("run"))], "{cmd_args:?}");
+        assert_eq!(cmd_args.windows(3).filter(|w| *w == ["--ro-bind", &text(&home), &text(&home)]).count(), 1);
     }
 
     #[test]
