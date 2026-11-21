@@ -1,0 +1,116 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/nypi-ai",
+    "crates/nypi-agent",
+    "crates/nypi-vault",
+    "crates/nypi-node-proto",
+    "crates/nypi-node",
+    "crates/nypi-core",
+    "crates/nypi-eval",
+    "crates/nypi-hub-proto",
+    "crates/nypi-hub",
+    "crates/nypi-cli",
+    "crates/nypi-board-proto",
+    "crates/nypi-board-ui",
+]
+# The board's page is built for WebAssembly by scripts/build-board.sh; `cargo build` skips it,
+# `--workspace` checks it.
+default-members = [
+    "crates/nypi-ai",
+    "crates/nypi-agent",
+    "crates/nypi-vault",
+    "crates/nypi-node-proto",
+    "crates/nypi-node",
+    "crates/nypi-core",
+    "crates/nypi-eval",
+    "crates/nypi-hub-proto",
+    "crates/nypi-hub",
+    "crates/nypi-cli",
+    "crates/nypi-board-proto",
+]
+
+[workspace.package]
+version = "0.4.0"
+edition = "2024"
+license = "MIT"
+description = "A compiled personal-agent framework in Rust: a chief-of-staff agent across your machines"
+repository = "https://github.com/Nyporte/NyPi"
+homepage = "https://github.com/Nyporte/NyPi"
+readme = "README.md"
+
+[workspace.dependencies]
+nypi-ai = { path = "crates/nypi-ai" }
+nypi-agent = { path = "crates/nypi-agent" }
+nypi-vault = { path = "crates/nypi-vault" }
+nypi-core = { path = "crates/nypi-core" }
+nypi-eval = { path = "crates/nypi-eval" }
+nypi-hub = { path = "crates/nypi-hub" }
+nypi-hub-proto = { path = "crates/nypi-hub-proto" }
+nypi-node = { path = "crates/nypi-node" }
+nypi-node-proto = { path = "crates/nypi-node-proto" }
+nypi-board-proto = { path = "crates/nypi-board-proto" }
+
+anyhow = "1"
+candle-core = "0.11.1"
+candle-nn = "0.11.1"
+async-trait = "0.1"
+base64 = "0.22"
+bytes = "1"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+crossterm = { version = "0.29", features = ["event-stream"] }
+dirs = "6"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+futures = "0.3"
+globset = "0.4"
+hmac = "0.12"
+httparse = "1"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+ignore = "0.4"
+libc = "0.2"
+ratatui = "0.30"
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+regex = "1"
+ring = "0.17"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rustls-webpki = { version = "0.103", default-features = false, features = ["ring", "std"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "http2"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+similar = "2"
+tar = { version = "0.4", default-features = false }
+socket2 = { version = "0.6", features = ["all"] }
+tempfile = "3"
+thiserror = "2"
+tokenizers = { version = "0.22.2", default-features = false, features = ["fancy-regex"] }
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+unicode-normalization = "0.1"
+unicode-width = "0.2"
+uuid = { version = "1", features = ["v4", "v7"] }
+webpki-roots = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
+strip = true
+
+# The board's page: small over fast, it is downloaded by phones.
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+# wasm-bindgen reads the module's feature section, which stripping removes.
+strip = false
+
+# Dependencies are optimized in debug builds too: the local embedding model (candle) is
+# unusably slow unoptimized, and dependencies rarely change, so this costs one rebuild.
+[profile.dev.package."*"]
+opt-level = 3

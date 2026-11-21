@@ -1,0 +1,10 @@
+[package]
+name = "nypi-board-proto"
+description = "NyPi board: the types the board service and its WebAssembly page exchange"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

@@ -1,0 +1,28 @@
+#!/bin/sh
+# NyPi pre-commit hook: formatting, lints and tests for the Rust workspace.
+# Enable it once per clone with: git config core.hooksPath scripts/githooks
+# The checks run on the working tree, so unstaged edits are checked too.
+
+set -e
+
+STAGED_FILES=$(git diff --cached --name-only)
+
+RUST_CHANGED=0
+for file in $STAGED_FILES; do
+  case "$file" in
+    crates/*|Cargo.toml|Cargo.lock|rustfmt.toml)
+      RUST_CHANGED=1
+      break
+      ;;
+  esac
+done
+
+if [ $RUST_CHANGED -eq 0 ]; then
+  exit 0
+fi
+
+echo "Running cargo fmt, clippy and tests..."
+cargo fmt --all --check || { echo "❌ Run 'cargo fmt --all' and restage."; exit 1; }
+cargo clippy --workspace --all-targets --quiet -- -D warnings || { echo "❌ Clippy failed."; exit 1; }
+cargo test --workspace --quiet || { echo "❌ Tests failed."; exit 1; }
+echo "✅ All pre-commit checks passed!"

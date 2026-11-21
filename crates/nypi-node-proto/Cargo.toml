@@ -1,0 +1,10 @@
+[package]
+name = "nypi-node-proto"
+description = "NyPi nodes: the types a hub and the node on a device exchange"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

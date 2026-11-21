@@ -1,0 +1,16 @@
+[package]
+name = "nypi-agent"
+description = "NyPi agent kernel: turn loop, tools, hooks, steering and follow-up queues"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+nypi-ai.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true

@@ -1,0 +1,146 @@
+# Builds and publishes a release for a tag vX.Y.Z (decision D98): the board's page once, the
+# binary for each target with that same page built in, then SHA256SUMS, manifest.json, and its
+# Ed25519 signature (manifest.json.sig) made with the release signing key, all on the GitHub
+# Release. `workflow_dispatch` runs everything but the publishing, as a dry run.
+#
+# Secrets and variables of the repository:
+#   NYPI_RELEASE_SIGNING_KEY (secret)   base64 private key from `nypi update keygen`
+#   NYPI_RELEASE_PUBKEY (variable)      its public half, built into every binary
+name: release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  board:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Build the board's page
+        run: ./scripts/build-board.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: board
+          path: crates/nypi-cli/assets/board/
+
+  build:
+    needs: board
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-15
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+          # Built on x86_64 with the cross linker (glibc 2.35, as the x86_64 build); its binary
+          # cannot run there, so the `--version` check is left to the clients' pre-flight.
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04
+            cross: true
+    runs-on: ${{ matrix.runner }}
+    env:
+      NYPI_RELEASE_PUBKEY: ${{ vars.NYPI_RELEASE_PUBKEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: The tag is the workspace's version
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          cargo_version="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)"
+          if [ "v$cargo_version" != "$GITHUB_REF_NAME" ]; then
+            echo "the tag $GITHUB_REF_NAME is not the workspace version v$cargo_version"; exit 1
+          fi
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: The cross linker
+        if: matrix.cross
+        run: |
+          sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          name: board
+          path: crates/nypi-cli/assets/board/
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }} -p nypi-cli
+      - name: Package
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          [ "$GITHUB_REF_TYPE" = tag ] || version="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')"
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/nypi" dist/nypi
+          if [ "${{ matrix.cross }}" != "true" ]; then ./dist/nypi --version; fi
+          tar -C dist -czf "dist/nypi-${version}-${{ matrix.target }}.tar.gz" nypi
+          rm dist/nypi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nypi-${{ matrix.target }}
+          path: dist/*.tar.gz
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: nypi-*
+          path: dist
+          merge-multiple: true
+      - name: SHA256SUMS and manifest.json
+        shell: bash
+        run: |
+          cd dist
+          version="${GITHUB_REF_NAME#v}"
+          [ "$GITHUB_REF_TYPE" = tag ] || version="$(ls nypi-*-x86_64-unknown-linux-gnu.tar.gz | sed -E 's/^nypi-(.*)-x86_64-unknown-linux-gnu\.tar\.gz$/\1/')"
+          sha256sum nypi-*.tar.gz > SHA256SUMS
+          python3 - "$version" <<'PY'
+          import hashlib, json, os, sys, datetime
+          version = sys.argv[1]
+          assets = {}
+          for name in sorted(os.listdir(".")):
+              if name.startswith("nypi-") and name.endswith(".tar.gz"):
+                  target = name[len(f"nypi-{version}-"):-len(".tar.gz")]
+                  data = open(name, "rb").read()
+                  assets[target] = {"file": name, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
+          repo = os.environ["GITHUB_REPOSITORY"]
+          manifest = {
+              "version": version,
+              "tag": f"v{version}",
+              "publishedAt": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "notesUrl": f"https://github.com/{repo}/releases/tag/v{version}",
+              "assets": assets,
+          }
+          open("manifest.json", "w").write(json.dumps(manifest, indent=2) + "\n")
+          PY
+      - name: Sign the manifest
+        env:
+          NYPI_RELEASE_SIGNING_KEY: ${{ secrets.NYPI_RELEASE_SIGNING_KEY }}
+        run: |
+          if [ -z "$NYPI_RELEASE_SIGNING_KEY" ]; then
+            if [ "$GITHUB_REF_TYPE" = tag ]; then
+              echo "a release needs NYPI_RELEASE_SIGNING_KEY: nothing is published unsigned"; exit 1
+            fi
+            echo "::notice::a dry run without NYPI_RELEASE_SIGNING_KEY: the manifest is not signed"
+            exit 0
+          fi
+          tar -xzf dist/nypi-*-x86_64-unknown-linux-gnu.tar.gz -C "$RUNNER_TEMP" nypi
+          "$RUNNER_TEMP/nypi" update sign dist/manifest.json
+      - name: Publish
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --title "NyPi $GITHUB_REF_NAME" --generate-notes \
+            dist/*.tar.gz dist/SHA256SUMS dist/manifest.json dist/manifest.json.sig

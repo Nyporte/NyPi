@@ -1,0 +1,43 @@
+[package]
+name = "nypi-core"
+description = "NyPi coding layer: tools, sessions, compaction, system prompt, skills, settings, Inspector"
+version.workspace = true
+repository.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+nypi-ai.workspace = true
+nypi-agent.workspace = true
+nypi-vault.workspace = true
+nypi-node.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+base64.workspace = true
+ring.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+futures.workspace = true
+globset.workspace = true
+ignore.workspace = true
+libc.workspace = true
+pulldown-cmark.workspace = true
+regex.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+similar.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+unicode-normalization.workspace = true
+uuid.workspace = true
+
+[features]
+local-embeddings = ["nypi-ai/local-embeddings"]
+
+[dev-dependencies]
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+tempfile.workspace = true

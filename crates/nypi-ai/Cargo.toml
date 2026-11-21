@@ -1,0 +1,34 @@
+[package]
+name = "nypi-ai"
+description = "NyPi LLM layer: provider-neutral messages, streaming events, and provider adapters"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+base64.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+futures.workspace = true
+hmac.workspace = true
+regex.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+uuid.workspace = true
+candle-core = { workspace = true, optional = true }
+candle-nn = { workspace = true, optional = true }
+tokenizers = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+candle-core = { workspace = true, optional = true, features = ["metal"] }
+candle-nn = { workspace = true, optional = true, features = ["metal"] }
+
+[features]
+# A local embedding model for long-term memory (Qwen3-Embedding, quantized GGUF, run with candle).
+local-embeddings = ["dep:candle-core", "dep:candle-nn", "dep:tokenizers"]

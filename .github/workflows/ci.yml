@@ -1,0 +1,39 @@
+# Checks every push to main and every pull request (decision D98): formatting, lints, the tests
+# (which make no network calls), and that nothing personal or secret came back into the tree.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Formatting
+        run: cargo fmt --all -- --check
+      - name: Lints
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test --workspace
+      - name: Hygiene
+        run: |
+          # The patterns are written so that this file does not match itself.
+          if git grep -n -I -i -E 'ny[p]orte\.dev|ny[a]pi' -- . ; then
+            echo "a personal domain or gateway name is back in the tree"; exit 1
+          fi
+          if git grep -n -I -E -e '-----BEGIN [A-Z ]*PRIVATE [K]EY-----' -- . ':!*tests*' ':!crates/nypi-vault/src/secrets.rs' ; then
+            echo "a private key is in the tree"; exit 1
+          fi
+          if git ls-files | grep -E '\.(pem|key)$|nypi-release\.key' ; then
+            echo "a key file is tracked"; exit 1
+          fi

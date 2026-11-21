@@ -1,0 +1,23 @@
+[package]
+name = "nypi-board-ui"
+description = "The NyPi board's page, written in Rust and compiled to WebAssembly (scripts/build-board.sh)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+nypi-board-proto.workspace = true
+console_error_panic_hook = "0.1"
+gloo-net = { version = "0.6", default-features = false, features = ["http", "json"] }
+js-sys = "0.3"
+leptos = { version = "0.8", features = ["csr"] }
+leptos_router = "0.8"
+pulldown-cmark.workspace = true
+send_wrapper = "0.6"
+serde.workspace = true
+serde_json.workspace = true
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = ["Document", "Element", "Event", "EventSource", "KeyboardEvent", "MessageEvent", "Window"] }

@@ -1,0 +1,22 @@
+# Rust build output
+/target/
+
+# Environment and local tool state
+.env
+.DS_Store
+.claude/
+.vscode/
+.idea/
+.zed/
+*.swp
+*~
+
+# The board page, built by scripts/build-board.sh
+/crates/nypi-cli/assets/board/
+
+# Signing keys, certificates, and local backups: never committed
+*.pem
+*.key
+nypi-release.key
+*.bak*
+/dist/

@@ -1,0 +1,18 @@
+[package]
+name = "nypi-node"
+description = "NyPi node: carries out a hub's calls on one device, with the tools that device offers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+nypi-node-proto.workspace = true
+async-trait.workspace = true
+ring.workspace = true
+rustls.workspace = true
+rustls-webpki.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-rustls.workspace = true
+tokio-util.workspace = true
