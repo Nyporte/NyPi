@@ -102,8 +102,14 @@ async fn the_owner_answers_an_approval_and_stops_a_run_from_the_board() {
         let outcome = runtime.prompt("push it", &tx).await.unwrap();
         (runtime, outcome)
     });
-    let now = client.now_until("the approval", |now| !now.inbox.is_empty()).await;
-    let InboxItem::Approval { id, summary, task, .. } = &now.inbox[0] else { panic!("{:?}", now.inbox) };
+    let now = client
+        .now_until("the approval", |now| now.inbox.iter().any(|item| matches!(item, InboxItem::Approval { .. })))
+        .await;
+    let Some(InboxItem::Approval { id, summary, task, .. }) =
+        now.inbox.iter().find(|item| matches!(item, InboxItem::Approval { .. }))
+    else {
+        panic!("{:?}", now.inbox)
+    };
     assert_eq!(summary, "git push origin main");
     assert!(task.is_some(), "the approval names its task");
     assert!(matches!(now.processes[0].step, Step::Approval { .. }));
