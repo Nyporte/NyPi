@@ -12,6 +12,16 @@ pub(super) const BACKLOG: usize = 4096;
 /// to the owner from one nobody is watching.
 pub const CHANNEL_ID: &str = "ch:";
 
+fn dec_saturating(counter: &AtomicUsize) {
+    let mut n = counter.load(Ordering::SeqCst);
+    while let Some(next) = n.checked_sub(1) {
+        match counter.compare_exchange_weak(n, next, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) => break,
+            Err(actual) => n = actual,
+        }
+    }
+}
+
 /// What every connection to one thread shares.
 pub(super) struct Hub {
     /// Every record the runtime emits, as a line, to every client.
@@ -140,12 +150,12 @@ impl Port {
         log(&format!("channel {name} is up"));
     }
 
-    /// Whether this channel puts approval questions to the owner now. Call once per change.
+    /// Whether this channel puts approval questions to the user now. Call once per change.
     pub fn asks_approvals(&self, yes: bool) {
         if yes {
             self.hub.approvers.fetch_add(1, Ordering::SeqCst);
         } else {
-            let _ = self.hub.approvers.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1));
+            dec_saturating(&self.hub.approvers);
         }
     }
 
@@ -302,7 +312,7 @@ pub(super) async fn pump(
             // (a `chat_settled`), or the report it lets stand (`task_report`), are what is told.
             Some("agent_settled") if record["review"] == "pending" => {
                 if beside {
-                    let _ = hub.beside.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1));
+                    dec_saturating(&hub.beside);
                 } else {
                     hub.busy.store(false, Ordering::SeqCst);
                     hub.approvals.lock().unwrap().clear();
@@ -311,7 +321,7 @@ pub(super) async fn pump(
                 log("run settled: under review");
             }
             Some("agent_settled") if beside => {
-                let _ = hub.beside.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1));
+                dec_saturating(&hub.beside);
                 let (level, text) = settled_report(&record);
                 if !hub.quiet && hub.attached() == 0 {
                     let task = record["task"].as_str().map(|id| TaskId(id.to_string()));
