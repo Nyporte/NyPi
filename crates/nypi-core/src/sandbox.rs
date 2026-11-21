@@ -159,15 +159,51 @@ pub fn bubblewrap_args(protected: &Protected) -> Vec<OsString> {
     args
 }
 
-/// The `.nypi` folders that exist at `folder` and above it, below the user's home: a project's
-/// own configuration, kept read-only for a subprocess that works there.
+/// The `.nypi` folders that exist at `folder`, above it, and in project folders just below it,
+/// under the user's home: a project's own configuration, kept read-only for a subprocess that
+/// works there.
 fn nypi_folders(folder: &Path, user_home: Option<&Path>) -> Vec<PathBuf> {
-    folder
+    let mut out: Vec<PathBuf> = folder
         .ancestors()
         .filter(|dir| user_home.is_none_or(|home| dir.starts_with(home)))
         .map(|dir| dir.join(".nypi"))
         .filter(|nypi| nypi.is_dir())
-        .collect()
+        .collect();
+    if user_home.is_none_or(|home| folder.starts_with(home)) {
+        let mut budget = 512usize;
+        collect_child_nypi(folder, 4, &mut budget, &mut out);
+    }
+    out
+}
+
+fn collect_child_nypi(dir: &Path, depth: usize, budget: &mut usize, out: &mut Vec<PathBuf>) {
+    if depth == 0 || *budget == 0 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        if *budget == 0 {
+            return;
+        }
+        let Ok(kind) = entry.file_type() else { continue };
+        if !kind.is_dir() {
+            continue;
+        }
+        *budget -= 1;
+        let name = entry.file_name();
+        let Some(text) = name.to_str() else { continue };
+        let path = entry.path();
+        if text.eq_ignore_ascii_case(".nypi") {
+            if !out.contains(&path) {
+                out.push(path);
+            }
+            continue;
+        }
+        if text.starts_with('.') || matches!(text, "target" | "node_modules" | "dist" | "vendor") {
+            continue;
+        }
+        collect_child_nypi(&path, depth - 1, budget, out);
+    }
 }
 
 /// Whether a variable's name marks a key or a token that a tool's subprocess has no business
@@ -404,6 +440,7 @@ mod tests {
             eprintln!("skipped: no sandbox here ({problem:?})");
             return;
         }
+        let sandbox = sandbox.in_folder(&user_home);
         let run = |script: &str| {
             let output = sandbox
                 .command("bash")
@@ -423,14 +460,18 @@ mod tests {
             "python3 -c \"open('.nypi/trust.json','w').write('{}')\" 2>/dev/null",
             "echo '{\"approval\":{\"mode\":\"off\"}}' > code/site/.nypi/settings.json",
             "mv ~/.nypi ~/.nypi-gone",
-            "cat ~/.env",
-            "cat .nypi/auth.json",
             "python3 -c \"import os, socket; socket.socket(socket.AF_UNIX).connect(os.path.expanduser('~/.nypi/run/hub.sock'))\" 2>/dev/null",
             "cd ~/.nypi/run && python3 -c \"import socket; socket.socket(socket.AF_UNIX).connect('hub.sock')\" 2>/dev/null",
         ] {
             let (ok, out) = run(attempt);
             assert!(!ok, "this must fail under the sandbox: {attempt}\n{out}");
             assert!(!out.contains("secret"), "a secret leaked from: {attempt}");
+        }
+        // Seatbelt denies opening a secret file; bubblewrap masks it with `/dev/null` so it reads
+        // as empty. Either way, no byte of a secret comes back.
+        for attempt in ["cat ~/.env", "cat .nypi/auth.json"] {
+            let (ok, out) = run(attempt);
+            assert!((!ok || out.is_empty()) && !out.contains("secret"), "a secret leaked from: {attempt}\n{out}");
         }
         assert_eq!(std::fs::read_to_string(home.join("audit/log.jsonl")).unwrap(), "kept\n");
         assert!(!home.join("settings.json").exists() && !user_home.join("code/site/.nypi/settings.json").exists());
